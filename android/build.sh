@@ -12,6 +12,12 @@ NCPU=4
 	cp -f openssl/obj/local/armeabi/libssl-static.a openssl/jni/lib/libssl.a || exit 1
 }
 
+[ -e ../configure ] || {
+	D="`pwd`"
+	cd ..
+	./bootstrap || exit 1
+	cd "$D"
+}
 
 [ -e Makefile ] || {
 	#CFLAGS="-Iopenssl/jni/include" \
