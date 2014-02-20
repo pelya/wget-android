@@ -70,6 +70,7 @@ typedef struct
   int csock;                    /* control connection socket */
   double dltime;                /* time of the download in msecs */
   enum stype rs;                /* remote system reported by ftp server */
+  enum ustype rsu;              /* when rs is ST_UNIX, here there are more details */
   char *id;                     /* initial directory */
   char *target;                 /* target file name */
   struct url *proxy;            /* FTWK-style proxy */
@@ -255,8 +256,10 @@ getftp (struct url *u, wgint passed_expected_bytes, wgint *qtyread,
   bool got_expected_bytes = false;
   bool rest_failed = false;
   int flags;
-  wgint rd_size;
+  wgint rd_size, previous_rd_size = 0;
   char type_char;
+  bool try_again;
+  bool list_a_used = false;
 
   assert (con != NULL);
   assert (con->target != NULL);
@@ -365,7 +368,7 @@ Error in server response, closing control connection.\n"));
       /* Third: Get the system type */
       if (!opt.server_response)
         logprintf (LOG_VERBOSE, "==> SYST ... ");
-      err = ftp_syst (csock, &con->rs);
+      err = ftp_syst (csock, &con->rs, &con->rsu);
       /* FTPRERR */
       switch (err)
         {
@@ -389,6 +392,44 @@ Error in server response, closing control connection.\n"));
         }
       if (!opt.server_response && err != FTPSRVERR)
         logputs (LOG_VERBOSE, _("done.    "));
+
+      /* 2013-10-17 Andrea Urbani (matfanjol)
+         According to the system type I choose which
+         list command will be used.
+         If I don't know that system, I will try, the
+         first time of each session, "LIST -a" and
+         "LIST". (see __LIST_A_EXPLANATION__ below) */
+      switch (con->rs)
+        {
+        case ST_VMS:
+          /* About ST_VMS there is an old note:
+             2008-01-29  SMS.  For a VMS FTP server, where "LIST -a" may not
+             fail, but will never do what is desired here,
+             skip directly to the simple "LIST" command
+             (assumed to be the last one in the list).  */
+          DEBUGP (("\nVMS: I know it and I will use \"LIST\" as standard list command\n"));
+          con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+          con->st |= AVOID_LIST_A;
+          break;
+        case ST_UNIX:
+          if (con->rsu == UST_MULTINET)
+            {
+              DEBUGP (("\nUNIX MultiNet: I know it and I will use \"LIST\" "
+                       "as standard list command\n"));
+              con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+              con->st |= AVOID_LIST_A;
+            }
+          else if (con->rsu == UST_TYPE_L8)
+            {
+              DEBUGP (("\nUNIX TYPE L8: I know it and I will use \"LIST -a\" "
+                       "as standard list command\n"));
+              con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+              con->st |= AVOID_LIST;
+            }
+          break;
+        default:
+          break;
+        }
 
       /* Fourth: Find the initial ftp directory */
 
@@ -616,16 +657,16 @@ Error in server response, closing control connection.\n"));
              The VMS restriction may be relaxed when the squirrely code
              above is reformed.
           */
-	  if ((con->rs == ST_VMS) && (target[0] != '/'))
-	    {
-	      cwd_start = 0;
-	      DEBUGP (("Using two-step CWD for relative path.\n"));
-	    }
-	  else
-	    {
+          if ((con->rs == ST_VMS) && (target[0] != '/'))
+            {
+              cwd_start = 0;
+              DEBUGP (("Using two-step CWD for relative path.\n"));
+            }
+          else
+            {
               /* Go straight to the target. */
-	      cwd_start = 1;
-	    }
+              cwd_start = 1;
+            }
 
           /* At least one VMS FTP server (TCPware V5.6-2) can switch to
              a UNIX emulation mode when given a UNIX-like directory
@@ -643,10 +684,10 @@ Error in server response, closing control connection.\n"));
              Unlike the rest of this block, this particular behavior
              _is_ VMS-specific, so it gets its own VMS test.
           */
-	  if ((con->rs == ST_VMS) && (strchr( target, '/') != NULL))
+          if ((con->rs == ST_VMS) && (strchr( target, '/') != NULL))
             {
               cwd_end = 3;
-	      DEBUGP (("Using extra \"CWD []\" step for VMS server.\n"));
+              DEBUGP (("Using extra \"CWD []\" step for VMS server.\n"));
             }
           else
             {
@@ -656,22 +697,22 @@ Error in server response, closing control connection.\n"));
           /* 2004-09-20 SMS. */
           /* Sorry about the deviant indenting.  Laziness. */
 
-	  for (cwd_count = cwd_start; cwd_count < cwd_end; cwd_count++)
-	{
+          for (cwd_count = cwd_start; cwd_count < cwd_end; cwd_count++)
+            {
           switch (cwd_count)
             {
               case 0:
-	        /* Step one (optional): Go to the initial directory,
-	           exactly as reported by the server.
-	        */
-	        targ = con->id;
+                /* Step one (optional): Go to the initial directory,
+                   exactly as reported by the server.
+                */
+                targ = con->id;
                 break;
 
               case 1:
-	        /* Step two: Go to the target directory.  (Absolute or
-	           relative will work now.)
-	        */
-	        targ = target;
+                /* Step two: Go to the target directory.  (Absolute or
+                   relative will work now.)
+                */
+                targ = target;
                 break;
 
               case 2:
@@ -684,7 +725,7 @@ Error in server response, closing control connection.\n"));
               default:
                 /* Can't happen. */
                 assert (1);
-	    }
+            }
 
           if (!opt.server_response)
             logprintf (LOG_VERBOSE, "==> CWD (%d) %s ... ", cwd_count,
@@ -775,6 +816,9 @@ Error in server response, closing control connection.\n"));
       return RETRFINISHED;
     }
 
+  do
+  {
+  try_again = false;
   /* If anything is to be retrieved, PORT (or PASV) must be sent.  */
   if (cmd & (DO_LIST | DO_RETR))
     {
@@ -938,42 +982,42 @@ Error in server response, closing control connection.\n"));
   if (cmd & DO_RETR)
     {
       /* If we're in spider mode, don't really retrieve anything except
-	 the directory listing and verify whether the given "file" exists.  */
+         the directory listing and verify whether the given "file" exists.  */
       if (opt.spider)
         {
-	  bool exists = false;
-	  uerr_t res;
-	  struct fileinfo *f;
-	  res = ftp_get_listing (u, con, &f);
-	  /* Set the DO_RETR command flag again, because it gets unset when
-	     calling ftp_get_listing() and would otherwise cause an assertion
-	     failure earlier on when this function gets repeatedly called
-	     (e.g., when recursing).  */
-	  con->cmd |= DO_RETR;
-	  if (res == RETROK)
-	    {
-	      while (f)
-		{
-		  if (!strcmp (f->name, u->file))
-		    {
-		      exists = true;
-		      break;
-		    }
-		  f = f->next;
-		}
+          bool exists = false;
+          uerr_t res;
+          struct fileinfo *f;
+          res = ftp_get_listing (u, con, &f);
+          /* Set the DO_RETR command flag again, because it gets unset when
+             calling ftp_get_listing() and would otherwise cause an assertion
+             failure earlier on when this function gets repeatedly called
+             (e.g., when recursing).  */
+          con->cmd |= DO_RETR;
+          if (res == RETROK)
+            {
+              while (f)
+                {
+                  if (!strcmp (f->name, u->file))
+                    {
+                      exists = true;
+                      break;
+                    }
+                  f = f->next;
+                }
               if (exists)
                 {
                   logputs (LOG_VERBOSE, "\n");
                   logprintf (LOG_NOTQUIET, _("File %s exists.\n"),
                              quote (u->file));
                 }
-	      else
+              else
                 {
-		  logputs (LOG_VERBOSE, "\n");
-		  logprintf (LOG_NOTQUIET, _("No such file %s.\n"),
-			     quote (u->file));
-		}
-	    }
+                  logputs (LOG_VERBOSE, "\n");
+                  logprintf (LOG_NOTQUIET, _("No such file %s.\n"),
+                             quote (u->file));
+                }
+            }
           fd_close (csock);
           con->csock = -1;
           fd_close (dtsock);
@@ -1041,7 +1085,8 @@ Error in server response, closing control connection.\n"));
       /* As Maciej W. Rozycki (macro@ds2.pg.gda.pl) says, `LIST'
          without arguments is better than `LIST .'; confirmed by
          RFC959.  */
-      err = ftp_list (csock, NULL, con->rs);
+      err = ftp_list (csock, NULL, con->st&AVOID_LIST_A, con->st&AVOID_LIST, &list_a_used);
+
       /* FTPRERR, WRITEFAILED */
       switch (err)
         {
@@ -1184,20 +1229,20 @@ Error in server response, closing control connection.\n"));
       else if (opt.noclobber || opt.always_rest || opt.timestamping || opt.dirstruct
                || opt.output_document || count > 0)
         {
-	  if (opt.unlink && file_exists_p (con->target))
-	    {
-	      int res = unlink (con->target);
-	      if (res < 0)
-		{
-		  logprintf (LOG_NOTQUIET, "%s: %s\n", con->target,
-			     strerror (errno));
-		  fd_close (csock);
-		  con->csock = -1;
-		  fd_close (dtsock);
-		  fd_close (local_sock);
-		  return UNLINKERR;
-		}
-	    }
+          if (opt.unlink && file_exists_p (con->target))
+            {
+              int res = unlink (con->target);
+              if (res < 0)
+                {
+                  logprintf (LOG_NOTQUIET, "%s: %s\n", con->target,
+                    strerror (errno));
+                    fd_close (csock);
+                    con->csock = -1;
+                    fd_close (dtsock);
+                    fd_close (local_sock);
+                    return UNLINKERR;
+                }
+            }
 
 #ifdef __VMS
           int open_id;
@@ -1343,8 +1388,10 @@ Error in server response, closing control connection.\n"));
     }
   /* If it was a listing, and opt.server_response is true,
      print it out.  */
-  if (opt.server_response && (con->cmd & DO_LIST))
+  if (con->cmd & DO_LIST)
     {
+      if (opt.server_response)
+        {
 /* 2005-02-25 SMS.
    Much of this work may already have been done, but repeating it should
    do no damage beyond wasting time.
@@ -1367,22 +1414,115 @@ Error in server response, closing control connection.\n"));
         logprintf (LOG_ALWAYS, "%s: %s\n", con->target, strerror (errno));
       else
         {
-          char *line;
-          /* The lines are being read with read_whole_line because of
+          char *line = NULL;
+          size_t bufsize = 0;
+          ssize_t len;
+
+          /* The lines are being read with getline because of
              no-buffering on opt.lfile.  */
-          while ((line = read_whole_line (fp)) != NULL)
+          while ((len = getline (&line, &bufsize, fp)) > 0)
             {
-              char *p = strchr (line, '\0');
-              while (p > line && (p[-1] == '\n' || p[-1] == '\r'))
-                *--p = '\0';
+              while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+                line[--len] = '\0';
               logprintf (LOG_ALWAYS, "%s\n",
                          quotearg_style (escape_quoting_style, line));
-              xfree (line);
             }
+          xfree (line);
           fclose (fp);
         }
-    } /* con->cmd & DO_LIST && server_response */
+        } /* server_response */
 
+      /* 2013-10-17 Andrea Urbani (matfanjol)
+         < __LIST_A_EXPLANATION__ >
+          After the SYST command, looks if it knows that system.
+          If yes, wget will force the use of "LIST" or "LIST -a".
+          If no, wget will try, only the first time of each session, before the
+          "LIST -a" command and after the "LIST".
+          If "LIST -a" works and returns more or equal data of the "LIST",
+          "LIST -a" will be the standard list command for all the session.
+          If "LIST -a" fails or returns less data than "LIST" (think on the case
+          of an existing file called "-a"), "LIST" will be the standard list
+          command for all the session.
+          ("LIST -a" is used to get also the hidden files)
+
+          */
+      if (!(con->st & LIST_AFTER_LIST_A_CHECK_DONE))
+        {
+          /* We still have to check "LIST" after the first "LIST -a" to see
+             if with "LIST" we get more data than "LIST -a", that means
+             "LIST -a" returned files/folders with "-a" name. */
+          if (con->st & AVOID_LIST_A)
+            {
+              /* LIST was used in this cycle.
+                 Let's see the result. */
+              if (rd_size > previous_rd_size)
+                {
+                  /* LIST returns more data than "LIST -a".
+                     "LIST" is the official command to use. */
+                  con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+                  DEBUGP (("LIST returned more data than \"LIST -a\": "
+                           "I will use \"LIST\" as standard list command\n"));
+                }
+              else if (previous_rd_size > rd_size)
+                {
+                  /* "LIST -a" returned more data then LIST.
+                     "LIST -a" is the official command to use. */
+                  con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+                  con->st |= AVOID_LIST;
+                  con->st &= ~AVOID_LIST_A;
+                  /* Sorry, please, download again the "LIST -a"... */
+                  try_again = true;
+                  DEBUGP (("LIST returned less data than \"LIST -a\": I will "
+                           "use \"LIST -a\" as standard list command\n"));
+                }
+              else
+                {
+                  /* LIST and "LIST -a" return the same data. */
+                  if (rd_size == 0)
+                    {
+                      /* Same empty data. We will check both again because
+                         we cannot check if "LIST -a" has returned an empty
+                         folder instead of a folder content. */
+                      con->st &= ~AVOID_LIST_A;
+                    }
+                  else
+                    {
+                      /* Same data, so, better to take "LIST -a" that
+                         shows also hidden files/folders (when present) */
+                      con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+                      con->st |= AVOID_LIST;
+                      con->st &= ~AVOID_LIST_A;
+                      DEBUGP (("LIST returned the same amount of data of "
+                               "\"LIST -a\": I will use \"LIST -a\" as standard "
+                               "list command\n"));
+                    }
+                }
+            }
+          else
+            {
+              /* In this cycle "LIST -a" should being used. Is it true? */
+              if (list_a_used)
+                {
+                  /* Yes, it is.
+                     OK, let's save the amount of data and try again
+                     with LIST */
+                  previous_rd_size = rd_size;
+                  try_again = true;
+                  con->st |= AVOID_LIST_A;
+                }
+              else
+                {
+                  /* No: something happens and LIST was used.
+                     This means "LIST -a" raises an error. */
+                  con->st |= LIST_AFTER_LIST_A_CHECK_DONE;
+                  con->st |= AVOID_LIST_A;
+                  DEBUGP (("\"LIST -a\" failed: I will use \"LIST\" "
+                           "as standard list command\n"));
+                }
+            }
+        }
+    }
+  } while (try_again);
   return RETRFINISHED;
 }
 
@@ -1447,21 +1587,6 @@ ftp_loop_internal (struct url *u, struct fileinfo *f, ccon *con, char **local_fi
 
   orig_lp = con->cmd & LEAVE_PENDING ? 1 : 0;
 
-  /* For file RETR requests, we can write a WARC record.
-     We record the file contents to a temporary file. */
-  if (warc_enabled && (con->cmd & DO_RETR))
-    {
-      warc_tmp = warc_tempfile ();
-      if (warc_tmp == NULL)
-        return WARC_TMP_FOPENERR;
-
-      if (!con->proxy && con->csock != -1)
-        {
-          warc_ip = (ip_address *) alloca (sizeof (ip_address));
-          socket_ip_address (con->csock, warc_ip, ENDPOINT_PEER);
-        }
-    }
-
   /* THE loop.  */
   do
     {
@@ -1487,6 +1612,21 @@ ftp_loop_internal (struct url *u, struct fileinfo *f, ccon *con, char **local_fi
             con->cmd &= ~DO_CWD;
           else
             con->cmd |= DO_CWD;
+        }
+
+      /* For file RETR requests, we can write a WARC record.
+         We record the file contents to a temporary file. */
+      if (warc_enabled && (con->cmd & DO_RETR) && warc_tmp == NULL)
+        {
+          warc_tmp = warc_tempfile ();
+          if (warc_tmp == NULL)
+            return WARC_TMP_FOPENERR;
+
+          if (!con->proxy && con->csock != -1)
+            {
+              warc_ip = (ip_address *) alloca (sizeof (ip_address));
+              socket_ip_address (con->csock, warc_ip, ENDPOINT_PEER);
+            }
         }
 
       /* Decide whether or not to restart.  */
@@ -1624,7 +1764,7 @@ ftp_loop_internal (struct url *u, struct fileinfo *f, ccon *con, char **local_fi
           /* warc_write_resource_record has also closed warc_tmp. */
         }
 
-      if ((con->cmd & DO_LIST))
+      if (con->cmd & DO_LIST)
         /* This is a directory listing file. */
         {
           if (!opt.remove_listing)
@@ -2283,11 +2423,11 @@ ftp_loop (struct url *u, char **local_file, int *dt, struct url *proxy,
             file_part = u->path;
           ispattern = has_wildcards_p (file_part);
         }
-      if (ispattern || recursive || opt.timestamping)
+      if (ispattern || recursive || opt.timestamping || opt.preserve_perm)
         {
           /* ftp_retrieve_glob is a catch-all function that gets called
-             if we need globbing, time-stamping or recursion.  Its
-             third argument is just what we really need.  */
+             if we need globbing, time-stamping, recursion or preserve
+             permissions.  Its third argument is just what we really need.  */
           res = ftp_retrieve_glob (u, &con,
                                    ispattern ? GLOB_GLOBALL : GLOB_GETONE);
         }

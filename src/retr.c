@@ -37,6 +37,9 @@ as that of the covered work.  */
 #include <errno.h>
 #include <string.h>
 #include <assert.h>
+#ifdef VMS
+# include <unixio.h>            /* For delete(). */
+#endif
 
 #include "exits.h"
 #include "utils.h"
@@ -677,20 +680,23 @@ calc_rate (wgint bytes, double secs, int *units)
 }
 
 
-#define SUSPEND_POST_DATA do {                  \
-  post_data_suspended = true;                   \
-  saved_post_data = opt.post_data;              \
-  saved_post_file_name = opt.post_file_name;    \
-  opt.post_data = NULL;                         \
-  opt.post_file_name = NULL;                    \
+#define SUSPEND_METHOD do {                     \
+  method_suspended = true;                      \
+  saved_body_data = opt.body_data;              \
+  saved_body_file_name = opt.body_file;         \
+  saved_method = opt.method;                    \
+  opt.body_data = NULL;                         \
+  opt.body_file = NULL;                         \
+  opt.method = NULL;                            \
 } while (0)
 
-#define RESTORE_POST_DATA do {                          \
-  if (post_data_suspended)                              \
+#define RESTORE_METHOD do {                             \
+  if (method_suspended)                                 \
     {                                                   \
-      opt.post_data = saved_post_data;                  \
-      opt.post_file_name = saved_post_file_name;        \
-      post_data_suspended = false;                      \
+      opt.body_data = saved_body_data;                  \
+      opt.body_file = saved_body_file_name;             \
+      opt.method = saved_method;                        \
+      method_suspended = false;                         \
     }                                                   \
 } while (0)
 
@@ -718,9 +724,10 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
   char *local_file;
   int redirection_count = 0;
 
-  bool post_data_suspended = false;
-  char *saved_post_data = NULL;
-  char *saved_post_file_name = NULL;
+  bool method_suspended = false;
+  char *saved_body_data = NULL;
+  char *saved_method = NULL;
+  char *saved_body_file_name = NULL;
 
   /* If dt is NULL, use local storage.  */
   if (!dt)
@@ -761,7 +768,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
                      proxy, error);
           xfree (url);
           xfree (error);
-          RESTORE_POST_DATA;
+          RESTORE_METHOD;
           result = PROXERR;
           goto bail;
         }
@@ -770,7 +777,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
           logprintf (LOG_NOTQUIET, _("Error in proxy URL %s: Must be HTTP.\n"), proxy);
           url_free (proxy_url);
           xfree (url);
-          RESTORE_POST_DATA;
+          RESTORE_METHOD;
           result = PROXERR;
           goto bail;
         }
@@ -854,7 +861,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
           xfree (url);
           xfree (mynewloc);
           xfree (error);
-          RESTORE_POST_DATA;
+          RESTORE_METHOD;
           goto bail;
         }
 
@@ -876,7 +883,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
             }
           xfree (url);
           xfree (mynewloc);
-          RESTORE_POST_DATA;
+          RESTORE_METHOD;
           result = WRONGCODE;
           goto bail;
         }
@@ -899,8 +906,8 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
 	 RFC2616 HTTP/1.1 introduces code 307 Temporary Redirect
 	 specifically to preserve the method of the request.
 	 */
-      if (result != NEWLOCATION_KEEP_POST && !post_data_suspended)
-        SUSPEND_POST_DATA;
+      if (result != NEWLOCATION_KEEP_POST && !method_suspended)
+        SUSPEND_METHOD;
 
       goto redirected;
     }
@@ -963,7 +970,7 @@ retrieve_url (struct url * orig_parsed, const char *origurl, char **file,
       xfree (url);
     }
 
-  RESTORE_POST_DATA;
+  RESTORE_METHOD;
 
 bail:
   if (register_status)
@@ -1178,7 +1185,16 @@ free_urlpos (struct urlpos *l)
 void
 rotate_backups(const char *fname)
 {
-  int maxlen = strlen (fname) + 1 + numdigit (opt.backups) + 1;
+#ifdef __VMS
+# define SEP "_"
+# define AVS ";*"                       /* All-version suffix. */
+# define AVSL (sizeof (AVS) - 1)
+#else
+# define SEP "."
+# define AVSL 0
+#endif
+
+  int maxlen = strlen (fname) + sizeof (SEP) + numdigit (opt.backups) + AVSL;
   char *from = (char *)alloca (maxlen);
   char *to = (char *)alloca (maxlen);
   struct_stat sb;
@@ -1190,12 +1206,24 @@ rotate_backups(const char *fname)
 
   for (i = opt.backups; i > 1; i--)
     {
-      sprintf (from, "%s.%d", fname, i - 1);
-      sprintf (to, "%s.%d", fname, i);
+#ifdef VMS
+      /* Delete (all versions of) any existing max-suffix file, to avoid
+       * creating multiple versions of it.  (On VMS, rename() will
+       * create a new version of an existing destination file, not
+       * destroy/overwrite it.)
+       */
+      if (i == opt.backups)
+        {
+          sprintf (to, "%s%s%d%s", fname, SEP, i, AVS);
+          delete (to);
+        }
+#endif
+      sprintf (to, "%s%s%d", fname, SEP, i);
+      sprintf (from, "%s%s%d", fname, SEP, i - 1);
       rename (from, to);
     }
 
-  sprintf (to, "%s.%d", fname, 1);
+  sprintf (to, "%s%s%d", fname, SEP, 1);
   rename(fname, to);
 }
 

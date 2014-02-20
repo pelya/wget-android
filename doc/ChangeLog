@@ -1,3 +1,76 @@
+2013-12-29  Giuseppe Scrivano  <gscrivan@redhat.com>
+
+	* wget.texi: Update to GFDL 1.3.
+
+2013-12-22  Mike Frysinger  <vapier@gentoo.org>
+
+	* sample.wgetrc: add links to the manual.
+
+2013-10-06  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* wget.texi: add/explain quoting of wildcard patterns
+
+2013-09-04  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* sample.wgetrc: added "secureprotocol" example
+	* wget.texi (HTTPS (SSL/TLS) Options): Document PFS.
+
+2013-08-23  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* sample.wgetrc: added "httpsonly" example
+
+2013-08-22  Tim Ruehsen  <tim.ruehsen@gmx.de>
+
+	* wget.texi: added description for --https-only
+
+2013-08-13  Hrvoje Niksic  <hniksic@xemacs.org>
+
+	* wget.texi (Download Options): Fix misspelling.
+
+2013-07-09  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* wget.texi (Download Options): Add documentation for --backups.
+	(Wgetrc Commands): Add documentation for backups.
+	Reported by: Tomas Hozza <thozza@redhat.com>.
+
+2013-07-11  Tomas Hozza  <thozza@redhat.com>
+
+	* wget.texi: Document --regex-type and --preserve-permissions.
+
+2013-06-17  Dave Reisner  <dreisner@archlinux.org> (tiny change)
+
+	* texi2pod.pl: Fix formatting error that causes build to fail with
+	Perl 5.18
+
+2013-06-17  Darshit Shah  <darnir@gmail.com>
+
+	* wget.texi (POST): Explain the new redirection rules.
+	* wget.texi (Other HTTP Methods): Same.
+	* wget.texi (body-data): Fix typo in description.
+
+2013-05-10  Darshit Shah <darnir@gmail.com>  (tiny change)
+
+	* wget.texi (No of tries): Fix typo to make it clear that --tries
+	option sets number of tries not retries.
+	Reported by: Hauke Hoffman <haukebjoernhoffman@googlemail.com>
+
+2013-04-28  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* wget.texi (Types of Files...): Document --accept-regex,
+	--reject-regex.
+	Reported by: Tomas Hozza <thozza@redhat.com>.
+
+2013-04-14  Giuseppe Scrivano  <gscrivano@gnu.org>
+
+	* wget.texi (Download Options): Document "mega" dot style.
+
+2013-04-05  Darshit Shah <darnir@gmail.com>
+
+	* doc/wget.texi: Fix ambiguous wording in --post-data section. Make it
+	clear that wget does not check for the format of the post-data.
+	* doc/wget.texi: Add documentation for --method, --body-data and
+	--body-file.
+
 2012-10-08  Stefano Lattarini <stefano.lattarini@gmail.com>  (tiny change)
 
 	docs: fix errors and warnings with Texinfo 5

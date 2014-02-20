@@ -701,7 +701,10 @@ url_parse (const char *url, int *error, struct iri *iri, bool percent_encode)
       if (!iri->utf8_encode)
         new_url = NULL;
       else
-        iri->orig_url = xstrdup (url);
+        {
+          iri->orig_url = xstrdup (url);
+          percent_encode = true;
+        }
     }
 
   /* XXX XXX Could that change introduce (security) bugs ???  XXX XXX*/
@@ -1617,7 +1620,26 @@ url_file_name (const struct url *u, char *replaced_filename)
   append_char ('\0', &temp_fnres);
 
   /* Check that the length of the file name is acceptable. */
+#ifdef WINDOWS
+  if (MAX_PATH > (fnres.tail + CHOMP_BUFFER + 2))
+    {
+      max_length = MAX_PATH - (fnres.tail + CHOMP_BUFFER + 2);
+      /* FIXME: In Windows a filename is usually limited to 255 characters.
+      To really be accurate you could call GetVolumeInformation() to get
+      lpMaximumComponentLength
+      */
+      if (max_length > 255)
+        {
+          max_length = 255;
+        }
+    }
+  else
+    {
+      max_length = 0;
+    }
+#else
   max_length = get_max_length (fnres.base, fnres.tail, _PC_NAME_MAX) - CHOMP_BUFFER;
+#endif
   if (max_length > 0 && strlen (temp_fnres.base) > max_length)
     {
       logprintf (LOG_NOTQUIET, "The name is too long, %lu chars total.\n",
@@ -1650,11 +1672,12 @@ url_file_name (const struct url *u, char *replaced_filename)
      2) Retrieval with regetting.
      3) Timestamping is used.
      4) Hierarchy is built.
+     5) Backups are specified.
 
      The exception is the case when file does exist and is a
      directory (see `mkalldirs' for explanation).  */
 
-  if ((opt.noclobber || opt.always_rest || opt.timestamping || opt.dirstruct)
+  if (ALLOW_CLOBBER
       && !(file_exists_p (fname) && !file_non_directory_p (fname)))
     {
       unique = fname;

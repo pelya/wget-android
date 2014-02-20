@@ -74,7 +74,7 @@ extern char *version_string;
 struct http_stat;
 static char *create_authorization_line (const char *, const char *,
                                         const char *, const char *,
-                                        const char *, bool *);
+                                        const char *, bool *, uerr_t *);
 static char *basic_authentication_encode (const char *, const char *);
 static bool known_authentication_scheme_p (const char *, const char *);
 static void ensure_extension (struct http_stat *, const char *, int *);
@@ -147,27 +147,20 @@ struct request {
 
 extern int numurls;
 
-/* Create a new, empty request.  At least request_set_method must be
-   called before the request can be used.  */
+/* Create a new, empty request. Set the request's method and its
+   arguments.  METHOD should be a literal string (or it should outlive
+   the request) because it will not be freed.  ARG will be freed by
+   request_free.  */
 
 static struct request *
-request_new (void)
+request_new (const char *method, char *arg)
 {
   struct request *req = xnew0 (struct request);
   req->hcapacity = 8;
   req->headers = xnew_array (struct request_header, req->hcapacity);
-  return req;
-}
-
-/* Set the request's method and its arguments.  METH should be a
-   literal string (or it should outlive the request) because it will
-   not be freed.  ARG will be freed by request_free.  */
-
-static void
-request_set_method (struct request *req, const char *meth, char *arg)
-{
-  req->method = meth;
+  req->method = method;
   req->arg = arg;
+  return req;
 }
 
 /* Return the method string passed with the last call to
@@ -459,14 +452,14 @@ register_basic_auth_host (const char *hostname)
    also be written to that file.  */
 
 static int
-post_file (int sock, const char *file_name, wgint promised_size, FILE *warc_tmp)
+body_file_send (int sock, const char *file_name, wgint promised_size, FILE *warc_tmp)
 {
   static char chunk[8192];
   wgint written = 0;
   int write_error;
   FILE *fp;
 
-  DEBUGP (("[writing POST file %s ... ", file_name));
+  DEBUGP (("[writing BODY file %s ... ", file_name));
 
   fp = fopen (file_name, "rb");
   if (!fp)
@@ -930,8 +923,6 @@ skip_short_body (int fd, wgint contlen, bool chunked)
   wgint remaining_chunk_size = 0;
   char dlbuf[SKIP_SIZE + 1];
   dlbuf[SKIP_SIZE] = '\0';        /* so DEBUGP can safely print it */
-
-  assert (contlen != -1 || contlen);
 
   /* If the body is too large, it makes more sense to simply close the
      connection than to try to read the body.  */
@@ -1648,12 +1639,6 @@ read_response_body (struct http_stat *hs, int sock, FILE *fp, wgint contlen,
 } while (0)
 #endif /* def __VMS [else] */
 
-/* The flags that allow clobbering the file (opening with "wb").
-   Defined here to avoid repetition later.  #### This will require
-   rework.  */
-#define ALLOW_CLOBBER (opt.noclobber || opt.always_rest || opt.timestamping \
-                       || opt.dirstruct || opt.output_document)
-
 /* Retrieve a document through HTTP protocol.  It recognizes status
    code, and correctly handles redirections.  It closes the network
    socket.  If it receives an error from the functions below it, it
@@ -1703,7 +1688,7 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
 
   char *head;
   struct response *resp;
-  char hdrval[256];
+  char hdrval[512];
   char *message;
 
   /* Declare WARC variables. */
@@ -1726,7 +1711,7 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
     !opt.http_keep_alive || opt.ignore_length;
 
   /* Headers sent when using POST. */
-  wgint post_data_size = 0;
+  wgint body_data_size = 0;
 
   bool host_lookup_failed = false;
 
@@ -1758,15 +1743,13 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
   conn = u;
 
   /* Prepare the request to send. */
-
-  req = request_new ();
   {
     char *meth_arg;
     const char *meth = "GET";
     if (head_only)
       meth = "HEAD";
-    else if (opt.post_file_name || opt.post_data)
-      meth = "POST";
+    else if (opt.method)
+      meth = opt.method;
     /* Use the full path, i.e. one that includes the leading slash and
        the query string.  E.g. if u->path is "foo/bar" and u->query is
        "param=value", full_path will be "/foo/bar?param=value".  */
@@ -1781,7 +1764,7 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
       meth_arg = xstrdup (u->url);
     else
       meth_arg = url_full_path (u);
-    request_set_method (req, meth, meth_arg);
+    req = request_new (meth, meth_arg);
   }
 
   request_set_header (req, "Referer", (char *) hs->referer, rel_none);
@@ -1852,25 +1835,30 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
         }
     }
 
-  if (opt.post_data || opt.post_file_name)
+  if (opt.method)
     {
-      request_set_header (req, "Content-Type",
-                          "application/x-www-form-urlencoded", rel_none);
-      if (opt.post_data)
-        post_data_size = strlen (opt.post_data);
-      else
+
+      if (opt.body_data || opt.body_file)
         {
-          post_data_size = file_size (opt.post_file_name);
-          if (post_data_size == -1)
+          request_set_header (req, "Content-Type",
+                              "application/x-www-form-urlencoded", rel_none);
+
+          if (opt.body_data)
+            body_data_size = strlen (opt.body_data);
+          else
             {
-              logprintf (LOG_NOTQUIET, _("POST data file %s missing: %s\n"),
-                         quote (opt.post_file_name), strerror (errno));
-              return FILEBADFILE;
+              body_data_size = file_size (opt.body_file);
+              if (body_data_size == -1)
+                {
+                  logprintf (LOG_NOTQUIET, _("BODY data file %s missing: %s\n"),
+                             quote (opt.body_file), strerror (errno));
+                  return FILEBADFILE;
+                }
             }
+          request_set_header (req, "Content-Length",
+                              xstrdup (number_to_static_string (body_data_size)),
+                              rel_value);
         }
-      request_set_header (req, "Content-Length",
-                          xstrdup (number_to_static_string (post_data_size)),
-                          rel_value);
     }
 
  retry_with_auth:
@@ -1987,6 +1975,10 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
                     exec_name, quote (relevant->host));
           return HOSTERR;
         }
+      else if (sock != -1)
+        {
+          sock = -1;
+        }
     }
 
   if (sock < 0)
@@ -2009,8 +2001,7 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
         {
           /* When requesting SSL URLs through proxies, use the
              CONNECT method to request passthrough.  */
-          struct request *connreq = request_new ();
-          request_set_method (connreq, "CONNECT",
+          struct request *connreq = request_new ("CONNECT",
                               aprintf ("%s:%d", u->host, u->port));
           SET_USER_AGENT (connreq);
           if (proxyauth)
@@ -2022,10 +2013,9 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
                  the regular request below.  */
               proxyauth = NULL;
             }
-          /* Examples in rfc2817 use the Host header in CONNECT
-             requests.  I don't see how that gains anything, given
-             that the contents of Host would be exactly the same as
-             the contents of CONNECT.  */
+          request_set_header (connreq, "Host",
+                              aprintf ("%s:%d", u->host, u->port),
+                              rel_value);
 
           write_error = request_send (connreq, sock, 0);
           request_free (connreq);
@@ -2128,28 +2118,28 @@ gethttp (struct url *u, struct http_stat *hs, int *dt, struct url *proxy,
 
   if (write_error >= 0)
     {
-      if (opt.post_data)
+      if (opt.body_data)
         {
-          DEBUGP (("[POST data: %s]\n", opt.post_data));
-          write_error = fd_write (sock, opt.post_data, post_data_size, -1);
+          DEBUGP (("[BODY data: %s]\n", opt.body_data));
+          write_error = fd_write (sock, opt.body_data, body_data_size, -1);
           if (write_error >= 0 && warc_tmp != NULL)
             {
               /* Remember end of headers / start of payload. */
               warc_payload_offset = ftello (warc_tmp);
 
               /* Write a copy of the data to the WARC record. */
-              int warc_tmp_written = fwrite (opt.post_data, 1, post_data_size, warc_tmp);
-              if (warc_tmp_written != post_data_size)
+              int warc_tmp_written = fwrite (opt.body_data, 1, body_data_size, warc_tmp);
+              if (warc_tmp_written != body_data_size)
                 write_error = -2;
             }
-        }
-      else if (opt.post_file_name && post_data_size != 0)
+         }
+      else if (opt.body_file && body_data_size != 0)
         {
           if (warc_tmp != NULL)
-            /* Remember end of headers / start of payload. */
+            /* Remember end of headers / start of payload */
             warc_payload_offset = ftello (warc_tmp);
 
-          write_error = post_file (sock, opt.post_file_name, post_data_size, warc_tmp);
+          write_error = body_file_send (sock, opt.body_file, body_data_size, warc_tmp);
         }
     }
 
@@ -2357,6 +2347,7 @@ read_header:
         }
 
       pconn.authorized = false;
+      uerr_t auth_err = RETROK;
       if (!auth_finished && (user && passwd))
         {
           /* IIS sends multiple copies of WWW-Authenticate, one with
@@ -2384,28 +2375,44 @@ read_header:
           else if (!basic_auth_finished
                    || !BEGINS_WITH (www_authenticate, "Basic"))
             {
-              char *pth;
-              pth = url_full_path (u);
-              request_set_header (req, "Authorization",
-                                  create_authorization_line (www_authenticate,
-                                                             user, passwd,
-                                                             request_method (req),
-                                                             pth,
-                                                             &auth_finished),
-                                  rel_value);
-              if (BEGINS_WITH (www_authenticate, "NTLM"))
-                ntlm_seen = true;
-              else if (!u->user && BEGINS_WITH (www_authenticate, "Basic"))
+              char *pth = url_full_path (u);
+              const char *value;
+              uerr_t *auth_stat;
+              auth_stat = xmalloc (sizeof (uerr_t));
+              *auth_stat = RETROK;
+
+              value =  create_authorization_line (www_authenticate,
+                                                  user, passwd,
+                                                  request_method (req),
+                                                  pth,
+                                                  &auth_finished,
+                                                  auth_stat);
+
+              auth_err = *auth_stat;
+              if (auth_err == RETROK)
                 {
-                  /* Need to register this host as using basic auth,
-                   * so we automatically send creds next time. */
-                  register_basic_auth_host (u->host);
+                  request_set_header (req, "Authorization", value, rel_value);
+
+                  if (BEGINS_WITH (www_authenticate, "NTLM"))
+                    ntlm_seen = true;
+                  else if (!u->user && BEGINS_WITH (www_authenticate, "Basic"))
+                    {
+                      /* Need to register this host as using basic auth,
+                       * so we automatically send creds next time. */
+                      register_basic_auth_host (u->host);
+                    }
+
+                  xfree (pth);
+                  xfree_null (message);
+                  resp_free (resp);
+                  xfree (head);
+                  xfree (auth_stat);
+                  goto retry_with_auth;
                 }
-              xfree (pth);
-              xfree_null (message);
-              resp_free (resp);
-              xfree (head);
-              goto retry_with_auth;
+              else
+                {
+                  /* Creating the Authorization header went wrong */
+                }
             }
           else
             {
@@ -2413,12 +2420,14 @@ read_header:
                * give up. */
             }
         }
-      logputs (LOG_NOTQUIET, _("Authorization failed.\n"));
       request_free (req);
       xfree_null (message);
       resp_free (resp);
       xfree (head);
-      return AUTHFAILED;
+      if (auth_err == RETROK)
+        return AUTHFAILED;
+      else
+        return auth_err;
     }
   else /* statcode != HTTP_STATUS_UNAUTHORIZED */
     {
@@ -2646,12 +2655,35 @@ read_header:
           /* From RFC2616: The status codes 303 and 307 have
              been added for servers that wish to make unambiguously
              clear which kind of reaction is expected of the client.
-             
+
              A 307 should be redirected using the same method,
              in other words, a POST should be preserved and not
-             converted to a GET in that case. */
-          if (statcode == HTTP_STATUS_TEMPORARY_REDIRECT)
-            return NEWLOCATION_KEEP_POST;
+             converted to a GET in that case.
+
+             With strict adherence to RFC2616, POST requests are not
+             converted to a GET request on 301 Permanent Redirect
+             or 302 Temporary Redirect.
+
+             A switch may be provided later based on the HTTPbis draft
+             that allows clients to convert POST requests to GET
+             requests on 301 and 302 response codes. */
+          switch (statcode)
+            {
+            case HTTP_STATUS_TEMPORARY_REDIRECT:
+              return NEWLOCATION_KEEP_POST;
+              break;
+            case HTTP_STATUS_MOVED_PERMANENTLY:
+              if (opt.method && strcasecmp (opt.method, "post") != 0)
+                return NEWLOCATION_KEEP_POST;
+              break;
+            case HTTP_STATUS_MOVED_TEMPORARILY:
+              if (opt.method && strcasecmp (opt.method, "post") != 0)
+                return NEWLOCATION_KEEP_POST;
+              break;
+            default:
+              return NEWLOCATION;
+              break;
+            }
           return NEWLOCATION;
         }
     }
@@ -3011,7 +3043,10 @@ http_loop (struct url *u, struct url *original_url, char **newloc,
 
   /* Send preliminary HEAD request if -N is given and we have an existing
    * destination file. */
-  file_name = url_file_name (opt.trustservernames ? u : original_url, NULL);
+  if (!opt.output_document)
+      file_name = url_file_name (opt.trustservernames ? u : original_url, NULL);
+  else
+    file_name = xstrdup (opt.output_document);
   if (opt.timestamping && (file_exists_p (file_name)
                            || opt.content_disposition))
     send_head_first = true;
@@ -3117,10 +3152,21 @@ Spider mode enabled. Check if remote file exists.\n"));
           logputs (LOG_VERBOSE, "\n");
           logprintf (LOG_NOTQUIET, _("Cannot write to %s (%s).\n"),
                      quote (hstat.local_file), strerror (errno));
-        case HOSTERR: case CONIMPOSSIBLE: case PROXERR: case AUTHFAILED:
-        case SSLINITFAILED: case CONTNOTSUPPORTED: case VERIFCERTERR:
-        case FILEBADFILE:
+        case HOSTERR: case CONIMPOSSIBLE: case PROXERR: case SSLINITFAILED:
+        case CONTNOTSUPPORTED: case VERIFCERTERR: case FILEBADFILE:
+        case UNKNOWNATTR:
           /* Fatal errors just return from the function.  */
+          ret = err;
+          goto exit;
+        case ATTRMISSING:
+          /* A missing attribute in a Header is a fatal Protocol error. */
+          logputs (LOG_VERBOSE, "\n");
+          logprintf (LOG_NOTQUIET, _("Required attribute missing from Header received.\n"));
+          ret = err;
+          goto exit;
+        case AUTHFAILED:
+          logputs (LOG_VERBOSE, "\n");
+          logprintf (LOG_NOTQUIET, _("Username/Password Authentication Failed.\n"));
           ret = err;
           goto exit;
         case WARC_ERR:
@@ -3661,7 +3707,7 @@ dump_hash (char *buf, const unsigned char *hash)
 static char *
 digest_authentication_encode (const char *au, const char *user,
                               const char *passwd, const char *method,
-                              const char *path)
+                              const char *path, uerr_t *auth_err)
 {
   static char *realm, *opaque, *nonce, *qop, *algorithm;
   static struct {
@@ -3681,7 +3727,7 @@ digest_authentication_encode (const char *au, const char *user,
   param_token name, value;
 
 
-  realm = opaque = nonce = qop = algorithm = NULL;
+  realm = opaque = nonce = algorithm = qop = NULL;
 
   au += 6;                      /* skip over `Digest' */
   while (extract_param (&au, &name, &value, ','))
@@ -3701,22 +3747,27 @@ digest_authentication_encode (const char *au, const char *user,
   if (qop != NULL && strcmp(qop,"auth"))
     {
       logprintf (LOG_NOTQUIET, _("Unsupported quality of protection '%s'.\n"), qop);
-      user = NULL; /* force freeing mem and return */
+      xfree_null (qop); /* force freeing mem and return */
+      qop = NULL;
     }
-
-  if (algorithm != NULL && strcmp (algorithm,"MD5") && strcmp (algorithm,"MD5-sess"))
+  else if (algorithm != NULL && strcmp (algorithm,"MD5") && strcmp (algorithm,"MD5-sess"))
     {
       logprintf (LOG_NOTQUIET, _("Unsupported algorithm '%s'.\n"), algorithm);
-      user = NULL; /* force freeing mem and return */
+      xfree_null (qop); /* force freeing mem and return */
+      qop = NULL;
     }
 
-  if (!realm || !nonce || !user || !passwd || !path || !method)
+  if (!realm || !nonce || !user || !passwd || !path || !method || !qop)
     {
       xfree_null (realm);
       xfree_null (opaque);
       xfree_null (nonce);
       xfree_null (qop);
       xfree_null (algorithm);
+      if (!qop)
+        *auth_err = UNKNOWNATTR;
+      else
+        *auth_err = ATTRMISSING;
       return NULL;
     }
 
@@ -3738,7 +3789,7 @@ digest_authentication_encode (const char *au, const char *user,
 
     dump_hash (a1buf, hash);
 
-    if (! strcmp (algorithm, "MD5-sess"))
+    if (algorithm && !strcmp (algorithm, "MD5-sess"))
       {
         /* A1BUF = H( H(user ":" realm ":" password) ":" nonce ":" cnonce ) */
         snprintf (cnonce, sizeof (cnonce), "%08x", random_number(INT_MAX));
@@ -3763,7 +3814,7 @@ digest_authentication_encode (const char *au, const char *user,
     md5_finish_ctx (&ctx, hash);
     dump_hash (a2buf, hash);
 
-    if (!strcmp(qop, "auth") || !strcmp (qop, "auth-int"))
+    if (qop && (!strcmp(qop, "auth") || !strcmp (qop, "auth-int")))
       {
         /* RFC 2617 Digest Access Authentication */
         /* generate random hex string */
@@ -3813,7 +3864,7 @@ digest_authentication_encode (const char *au, const char *user,
 
     res = xmalloc (res_size);
 
-    if (!strcmp(qop,"auth"))
+    if (qop && !strcmp (qop, "auth"))
       {
         res_len = snprintf (res, res_size, "Digest "\
                 "username=\"%s\", realm=\"%s\", nonce=\"%s\", uri=\"%s\", response=\"%s\""\
@@ -3838,6 +3889,13 @@ digest_authentication_encode (const char *au, const char *user,
         snprintf(res + res_len, res_size - res_len, ", algorithm=\"%s\"", algorithm);
       }
   }
+
+  xfree_null (realm);
+  xfree_null (opaque);
+  xfree_null (nonce);
+  xfree_null (qop);
+  xfree_null (algorithm);
+
   return res;
 }
 #endif /* ENABLE_DIGEST */
@@ -3879,7 +3937,7 @@ known_authentication_scheme_p (const char *hdrbeg, const char *hdrend)
 static char *
 create_authorization_line (const char *au, const char *user,
                            const char *passwd, const char *method,
-                           const char *path, bool *finished)
+                           const char *path, bool *finished, uerr_t *auth_err)
 {
   /* We are called only with known schemes, so we can dispatch on the
      first letter. */
@@ -3891,7 +3949,7 @@ create_authorization_line (const char *au, const char *user,
 #ifdef ENABLE_DIGEST
     case 'D':                   /* Digest */
       *finished = true;
-      return digest_authentication_encode (au, user, passwd, method, path);
+      return digest_authentication_encode (au, user, passwd, method, path, auth_err);
 #endif
 #ifdef ENABLE_NTLM
     case 'N':                   /* NTLM */

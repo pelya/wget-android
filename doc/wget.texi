@@ -47,11 +47,11 @@ notice identical to this one except for the removal of this paragraph
 (this paragraph not being relevant to the printed manual).
 @end ignore
 Permission is granted to copy, distribute and/or modify this document
-under the terms of the GNU Free Documentation License, Version 1.2 or
+under the terms of the GNU Free Documentation License, Version 1.3 or
 any later version published by the Free Software Foundation; with no
-Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.  A
-copy of the license is included in the section entitled ``GNU Free
-Documentation License''.
+Invariant Sections, with no Front-Cover Texts, and with no Back-Cover
+Texts.  A copy of the license is included in the section entitled
+``GNU Free Documentation License''.
 @c man end
 @end copying
 
@@ -550,10 +550,10 @@ IPs.
 
 @cindex retries
 @cindex tries
-@cindex number of retries
+@cindex number of tries
 @item -t @var{number}
 @itemx --tries=@var{number}
-Set number of retries to @var{number}.  Specify 0 or @samp{inf} for
+Set number of tries to @var{number}. Specify 0 or @samp{inf} for
 infinite retrying.  The default is to retry 20 times, with the exception
 of fatal errors like ``connection refused'' or ``not found'' (404),
 which are not retried.
@@ -629,6 +629,13 @@ same time as @samp{-N}.
 Note that when @samp{-nc} is specified, files with the suffixes
 @samp{.html} or @samp{.htm} will be loaded from the local disk and
 parsed as if they had been retrieved from the Web.
+
+@cindex backing up files
+@item --backups=@var{backups}
+Before (over)writing a file, back up an existing file by adding a
+@samp{.1} suffix (@samp{_1} on VMS) to the file name.  Such backup
+files are rotated to @samp{.2}, @samp{.3}, and so on, up to
+@var{backups} (and lost beyond that).
 
 @cindex continue retrieval
 @cindex incomplete downloads
@@ -715,9 +722,12 @@ different meaning to one dot.  With the @code{default} style each dot
 represents 1K, there are ten dots in a cluster and 50 dots in a line.
 The @code{binary} style has a more ``computer''-like orientation---8K
 dots, 16-dots clusters and 48 dots per line (which makes for 384K
-lines).  The @code{mega} style is suitable for downloading very large
+lines).  The @code{mega} style is suitable for downloading large
 files---each dot represents 64K retrieved, there are eight dots in a
 cluster, and 48 dots on each line (so each line contains 3M).
+If @code{mega} is not enough then you can use the @code{giga}
+style---each dot represents 1M retrieved, there are eight dots in a
+cluster, and 32 dots on each line (so each line contains 32M).
 
 Note that you can set the default style using the @code{progress}
 command in @file{.wgetrc}.  That setting may be overridden from the
@@ -732,7 +742,7 @@ Turn on time-stamping.  @xref{Time-Stamping}, for details.
 @item --no-use-server-timestamps
 Don't set the local file's timestamp by the one on the server.
 
-By default, when a file is downloaded, it's timestamps are set to
+By default, when a file is downloaded, its timestamps are set to
 match those from the remote file. This allows the use of
 @samp{--timestamping} on subsequent invocations of wget. However, it
 is sometimes useful to base the local file's timestamp on when it was
@@ -1457,6 +1467,11 @@ like everything else. Wget does not currently support
 @code{application/x-www-form-urlencoded}. Only one of
 @samp{--post-data} and @samp{--post-file} should be specified.
 
+Please note that wget does not require the content to be of the form
+@code{key1=value1&key2=value2}, and neither does it test for it. Wget will
+simply transmit whatever data is provided to it. Most servers however expect
+the POST data to be in the above format when processing HTML Forms.
+
 Please be aware that Wget needs to know the size of the POST data in
 advance.  Therefore the argument to @code{--post-file} must be a regular
 file; specifying a FIFO or something like @file{/dev/stdin} won't work.
@@ -1467,14 +1482,15 @@ use chunked unless it knows it's talking to an HTTP/1.1 server.  And it
 can't know that until it receives a response, which in turn requires the
 request to have been completed -- a chicken-and-egg problem.
 
-Note: if Wget is redirected after the POST request is completed, it
-will not send the POST data to the redirected URL.  This is because
-URLs that process POST often respond with a redirection to a regular
-page, which does not desire or accept POST.  It is not completely
-clear that this behavior is optimal; if it doesn't work out, it might
-be changed in the future.
+Note: As of version 1.15 if Wget is redirected after the POST request is
+completed, its behaviour will depend on the response code returned by the
+server.  In case of a 301 Moved Permanently, 302 Moved Temporarily or
+307 Temporary Redirect, Wget will, in accordance with RFC2616, continue
+to send a POST request.
+In case a server wants the client to change the Request method upon
+redirection, it should send a 303 See Other response code.
 
-This example shows how to log to a server using POST and then proceed to
+This example shows how to log in to a server using POST and then proceed to
 download the desired pages, presumably only accessible to authorized
 users:
 
@@ -1496,6 +1512,37 @@ the above will not work because @samp{--save-cookies} will not save
 them (and neither will browsers) and the @file{cookies.txt} file will
 be empty.  In that case use @samp{--keep-session-cookies} along with
 @samp{--save-cookies} to force saving of session cookies.
+
+@cindex Other HTTP Methods
+@item --method=@var{HTTP-Method}
+For the purpose of RESTful scripting, Wget allows sending of other HTTP Methods
+without the need to explicitly set them using @samp{--header=Header-Line}.
+Wget will use whatever string is passed to it after @samp{--method} as the HTTP
+Method to the server.
+
+@item --body-data=@var{Data-String}
+@itemx --body-file=@var{Data-File}
+Must be set when additional data needs to be sent to the server along with the
+Method specified using @samp{--method}.  @samp{--body-data} sends @var{string} as
+data, whereas @samp{--body-file} sends the contents of @var{file}.  Other than that,
+they work in exactly the same way.
+
+Currently, @samp{--body-file} is @emph{not} for transmitting files as a whole.
+Wget does not currently support @code{multipart/form-data} for transmitting data;
+only @code{application/x-www-form-urlencoded}. In the future, this may be changed
+so that wget sends the @samp{--body-file} as a complete file instead of sending its
+contents to the server. Please be aware that Wget needs to know the contents of
+BODY Data in advance, and hence the argument to @samp{--body-file} should be a
+regular file. See @samp{--post-file} for a more detailed explanation.
+Only one of @samp{--body-data} and @samp{--body-file} should be specified.
+
+If Wget is redirected after the request is completed, Wget will
+suspend the current method and send a GET request till the redirection
+is completed.  This is true for all redirection response codes except
+307 Temporary Redirect which is used to explicitly specify that the
+request method should @emph{not} change.  Another exception is when
+the method is set to @code{POST}, in which case the redirection rules
+specified under @samp{--post-data} are followed.
 
 @cindex Content-Disposition
 @item --content-disposition
@@ -1548,16 +1595,24 @@ without SSL support, none of these options are available.
 @cindex SSL protocol, choose
 @item --secure-protocol=@var{protocol}
 Choose the secure protocol to be used.  Legal values are @samp{auto},
-@samp{SSLv2}, @samp{SSLv3}, and @samp{TLSv1}.  If @samp{auto} is used,
-the SSL library is given the liberty of choosing the appropriate
+@samp{SSLv2}, @samp{SSLv3}, @samp{TLSv1} and @samp{PFS}.  If @samp{auto}
+is used, the SSL library is given the liberty of choosing the appropriate
 protocol automatically, which is achieved by sending an SSLv2 greeting
 and announcing support for SSLv3 and TLSv1.  This is the default.
 
 Specifying @samp{SSLv2}, @samp{SSLv3}, or @samp{TLSv1} forces the use
 of the corresponding protocol.  This is useful when talking to old and
-buggy SSL server implementations that make it hard for OpenSSL to
-choose the correct protocol version.  Fortunately, such servers are
-quite rare.
+buggy SSL server implementations that make it hard for the underlying
+SSL library to choose the correct protocol version.  Fortunately, such
+servers are quite rare.
+
+Specifying @samp{PFS} enforces the use of the so-called Perfect Forward
+Security cipher suites. In short, PFS adds security by creating a one-time
+key for each SSL connection. It has a bit more CPU impact on client and server.
+We use known to be secure ciphers (e.g. no MD4) and the TLS protocol.
+
+@item --https-only
+When in recursive mode, only HTTPS links are followed.
 
 @cindex SSL certificate, check
 @item --no-check-certificate
@@ -1775,6 +1830,10 @@ configurations passive FTP has a better chance of working.  However,
 in some rare firewall configurations, active FTP actually works when
 passive FTP doesn't.  If you suspect this to be the case, use this
 option, or set @code{passive_ftp=off} in your init file.
+
+@cindex file permissions
+@item --preserve-permissions
+Preserve remote file permissions instead of permissions set by umask.
 
 @cindex symbolic links, retrieving
 @item --retr-symlinks
@@ -2012,6 +2071,17 @@ accept or reject (@pxref{Types of Files}). Note that if
 any of the wildcard characters, @samp{*}, @samp{?}, @samp{[} or
 @samp{]}, appear in an element of @var{acclist} or @var{rejlist},
 it will be treated as a pattern, rather than a suffix.
+In this case, you have to enclose the pattern into quotes to prevent
+your shell from expanding it, like in @samp{-A "*.mp3"} or @samp{-A '*.mp3'}.
+
+@item --accept-regex @var{urlregex}
+@itemx --reject-regex @var{urlregex}
+Specify a regular expression to accept or reject the complete URL.
+
+@item --regex-type @var{regextype}
+Specify the regular expression type.  Possible types are @samp{posix} or
+@samp{pcre}.  Note that to be able to use @samp{pcre} type, wget has to be
+compiled with libpcre support.
 
 @item -D @var{domain-list}
 @itemx --domains=@var{domain-list}
@@ -2060,8 +2130,10 @@ dedicated @samp{--page-requisites} option.
 Ignore case when matching files and directories.  This influences the
 behavior of -R, -A, -I, and -X options, as well as globbing
 implemented when downloading from FTP sites.  For example, with this
-option, @samp{-A *.txt} will match @samp{file1.txt}, but also
+option, @samp{-A "*.txt"} will match @samp{file1.txt}, but also
 @samp{file2.TXT}, @samp{file3.TxT}, and so on.
+The quotes in the example are to prevent the shell from expanding the
+pattern.
 
 @item -H
 @itemx --span-hosts
@@ -2829,9 +2901,11 @@ enables it).
 Enable/disable saving pre-converted files with the suffix
 @samp{.orig}---the same as @samp{-K} (which enables it).
 
-@c @item backups = @var{number}
-@c #### Document me!
-@c
+@item backups = @var{number}
+Use up to @var{number} backups for a file.  Backups are rotated by
+adding an incremental counter that starts at @samp{1}.  The default is
+@samp{0}.
+
 @item base = @var{string}
 Consider relative @sc{url}s in input files (specified via the
 @samp{input} command or the @samp{--input-file}/@samp{-i} option,
@@ -4316,7 +4390,7 @@ subscribers of the Wget mailing list.
 @appendix Copying this manual
   
 @menu
-* GNU Free Documentation License::  Licnse for copying this manual.
+* GNU Free Documentation License::  License for copying this manual.
 @end menu
 
 @node GNU Free Documentation License,  , Copying this manual, Copying this manual

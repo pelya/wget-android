@@ -87,6 +87,7 @@ CMD_DECLARE (cmd_directory_vector);
 CMD_DECLARE (cmd_number);
 CMD_DECLARE (cmd_number_inf);
 CMD_DECLARE (cmd_string);
+CMD_DECLARE (cmd_string_uppercase);
 CMD_DECLARE (cmd_file);
 CMD_DECLARE (cmd_directory);
 CMD_DECLARE (cmd_time);
@@ -136,6 +137,8 @@ static const struct {
   { "backups",          &opt.backups,           cmd_number },
   { "base",             &opt.base_href,         cmd_string },
   { "bindaddress",      &opt.bind_address,      cmd_string },
+  { "bodydata",         &opt.body_data,         cmd_string },
+  { "bodyfile",         &opt.body_file,         cmd_string },
 #ifdef HAVE_SSL
   { "cacertificate",    &opt.ca_cert,           cmd_file },
 #endif
@@ -154,10 +157,8 @@ static const struct {
   { "convertlinks",     &opt.convert_links,     cmd_boolean },
   { "cookies",          &opt.cookies,           cmd_boolean },
   { "cutdirs",          &opt.cut_dirs,          cmd_number },
-#ifdef ENABLE_DEBUG
   { "debug",            &opt.debug,             cmd_boolean },
-#endif
-  { "defaultpage", 	&opt.default_page,      cmd_string},
+  { "defaultpage",      &opt.default_page,      cmd_string },
   { "deleteafter",      &opt.delete_after,      cmd_boolean },
   { "dirprefix",        &opt.dir_prefix,        cmd_directory },
   { "dirstruct",        NULL,                   cmd_spec_dirstruct },
@@ -191,6 +192,9 @@ static const struct {
   { "httppasswd",       &opt.http_passwd,       cmd_string }, /* deprecated */
   { "httppassword",     &opt.http_passwd,       cmd_string },
   { "httpproxy",        &opt.http_proxy,        cmd_string },
+#ifdef HAVE_SSL
+  { "httpsonly",        &opt.https_only,        cmd_boolean },
+#endif
   { "httpsproxy",       &opt.https_proxy,       cmd_string },
   { "httpuser",         &opt.http_user,         cmd_string },
   { "ignorecase",       &opt.ignore_case,       cmd_boolean },
@@ -210,9 +214,11 @@ static const struct {
   { "logfile",          &opt.lfilename,         cmd_file },
   { "login",            &opt.ftp_user,          cmd_string },/* deprecated*/
   { "maxredirect",      &opt.max_redirect,      cmd_number },
+  { "method",           &opt.method,            cmd_string_uppercase },
   { "mirror",           NULL,                   cmd_spec_mirror },
   { "netrc",            &opt.netrc,             cmd_boolean },
   { "noclobber",        &opt.noclobber,         cmd_boolean },
+  { "noconfig",         &opt.noconfig,          cmd_boolean },
   { "noparent",         &opt.no_parent,         cmd_boolean },
   { "noproxy",          &opt.no_proxy,          cmd_vector },
   { "numtries",         &opt.ntry,              cmd_number_inf },/* deprecated*/
@@ -455,8 +461,7 @@ home_dir (void)
     }
 
   ret = home ? xstrdup (home) : NULL;
-  if (buf)
-    free (buf);
+  free (buf);
 
   return ret;
 }
@@ -570,7 +575,8 @@ bool
 run_wgetrc (const char *file)
 {
   FILE *fp;
-  char *line;
+  char *line = NULL;
+  size_t bufsize = 0;
   int ln;
   int errcnt = 0;
 
@@ -582,7 +588,7 @@ run_wgetrc (const char *file)
       return true;                      /* not a fatal error */
     }
   ln = 1;
-  while ((line = read_whole_line (fp)) != NULL)
+  while (getline (&line, &bufsize, fp) > 0)
     {
       char *com = NULL, *val = NULL;
       int comind;
@@ -616,9 +622,9 @@ run_wgetrc (const char *file)
         }
       xfree_null (com);
       xfree_null (val);
-      xfree (line);
       ++ln;
     }
+  xfree (line);
   fclose (fp);
 
   return errcnt == 0;
@@ -956,8 +962,25 @@ cmd_string (const char *com, const char *val, void *place)
   return true;
 }
 
+/* Like cmd_string but ensure the string is upper case.  */
+static bool
+cmd_string_uppercase (const char *com, const char *val, void *place)
+{
+  char *q, **pstring;
+  pstring = (char **)place;
+  xfree_null (*pstring);
 
-/* Like the above, but handles tilde-expansion when reading a user's
+  *pstring = xmalloc (strlen (val) + 1);
+
+  for (q = *pstring; *val; val++, q++)
+    *q = c_toupper (*val);
+
+  *q = '\0';
+  return true;
+}
+
+
+/* Like cmd_string, but handles tilde-expansion when reading a user's
    `.wgetrc'.  In that case, and if VAL begins with `~', the tilde
    gets expanded to the user's home directory.  */
 static bool
@@ -1472,6 +1495,7 @@ cmd_spec_secure_protocol (const char *com, const char *val, void *place)
     { "sslv2", secure_protocol_sslv2 },
     { "sslv3", secure_protocol_sslv3 },
     { "tlsv1", secure_protocol_tlsv1 },
+    { "pfs", secure_protocol_pfs },
   };
   int ok = decode_string (val, choices, countof (choices), place);
   if (!ok)
@@ -1754,6 +1778,7 @@ cleanup (void)
   xfree_null (opt.user);
   xfree_null (opt.passwd);
   xfree_null (opt.base_href);
+  xfree_null (opt.method);
 
 #endif /* DEBUG_MALLOC */
 }
