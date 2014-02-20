@@ -31,6 +31,7 @@ else
 	LOCAL_PATH=`cd $LOCAL_PATH && pwd`
 fi
 ARCH=armeabi
+#ARCH=armeabi-v7a
 
 CFLAGS="\
 -fpic -ffunction-sections -funwind-tables -fstack-protector -D__ARM_ARCH_5__ -D__ARM_ARCH_5T__ -D__ARM_ARCH_5E__ -D__ARM_ARCH_5TE__ \
@@ -43,12 +44,10 @@ CFLAGS="\
 $CFLAGS"
 
 UNRESOLVED="-Wl,--no-undefined"
-SHARED="-shared -Wl,-soname,$SHARED_LIBRARY_NAME"
-if [ -n "$BUILD_EXECUTABLE" ]; then
-	SHARED="-Wl,--gc-sections -Wl,-z,nocopyreloc"
-fi
-if [ -n "$NO_SHARED_LIBS" ]; then
-	APP_SHARED_LIBS=
+SHARED="-Wl,--gc-sections -Wl,-z,nocopyreloc"
+if [ -n "$BUILD_LIBRARY" ]; then
+	[ -z "$SHARED_LIBRARY_NAME" ] && SHARED_LIBRARY_NAME=libapplication.so
+	SHARED="-shared -Wl,-soname,$SHARED_LIBRARY_NAME"
 fi
 if [ -n "$ALLOW_UNRESOLVED_SYMBOLS" ]; then
 	UNRESOLVED=
@@ -57,10 +56,8 @@ fi
 LDFLAGS="\
 $SHARED \
 --sysroot=$NDK/platforms/$PLATFORMVER/arch-arm \
--L$LOCAL_PATH/../../obj/local/$ARCH \
-`echo $APP_SHARED_LIBS | sed \"s@\([-a-zA-Z0-9_.]\+\)@$LOCAL_PATH/../../obj/local/$ARCH/lib\1.so@g\"` \
 -L$NDK/platforms/$PLATFORMVER/arch-arm/usr/lib \
--lc -lm -lGLESv1_CM -ldl -llog -lz \
+-lc -lm -ldl -lz \
 -L$NDK/sources/cxx-stl/gnu-libstdc++/$GCCVER/libs/$ARCH \
 -lgnustl_static \
 -no-canonical-prefixes $UNRESOLVED -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now \
@@ -74,9 +71,10 @@ LDFLAGS="$LDFLAGS" \
 CC="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-gcc" \
 CXX="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-g++" \
 RANLIB="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-ranlib" \
-LD="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-g++" \
+LD="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-ld" \
 AR="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-ar" \
 CPP="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-cpp $CFLAGS" \
+CXXCPP="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-cpp -x c++ $CFLAGS" \
 NM="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-nm" \
 AS="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-as" \
 STRIP="$NDK/toolchains/$GCCPREFIX-$GCCVER/prebuilt/$MYARCH/bin/$GCCPREFIX-strip" \
