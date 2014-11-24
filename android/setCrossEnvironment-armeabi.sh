@@ -54,7 +54,7 @@ if [ -n "$ALLOW_UNRESOLVED_SYMBOLS" ]; then
 fi
 
 LDFLAGS="\
-$SHARED \
+$LDFLAGS $SHARED \
 --sysroot=$NDK/platforms/$PLATFORMVER/arch-arm \
 -L$NDK/platforms/$PLATFORMVER/arch-arm/usr/lib \
 -lc -lm -ldl -lz \

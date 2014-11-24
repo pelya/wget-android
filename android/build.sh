@@ -5,7 +5,7 @@ ARCH_LIST="armeabi x86 mips"
 
 [ -d openssl ] || {
 	mkdir -p openssl
-	git clone https://android.googlesource.com/platform/external/openssl openssl/jni || exit 1
+	git clone https://android.googlesource.com/platform/external/openssl openssl/jni -b kitkat-mr2.2-release || exit 1
 	#sed -i 's/BUILD_HOST_SHARED_LIBRARY/BUILD_SHARED_LIBRARY/g' openssl/jni/*.mk
 	#sed -i 's/BUILD_HOST_STATIC_LIBRARY/BUILD_STATIC_LIBRARY/g' openssl/jni/*.mk
 	sed -i 's@external/openssl/@jni/@g' openssl/jni/*.mk
@@ -38,6 +38,7 @@ for ARCH in $ARCH_LIST; do
 
 	mkdir -p $ARCH
 	cd $ARCH
+	export LDFLAGS=-pie
 	[ -e Makefile ] || {
 		../setCrossEnvironment-$ARCH.sh ../../configure --host=$TOOLCHAIN --with-ssl=openssl --with-libssl-prefix=`pwd`/../openssl/$ARCH --disable-nls --disable-iri || exit 1
 	} || exit 1

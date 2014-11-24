@@ -56,7 +56,7 @@ if [ -n "$ALLOW_UNRESOLVED_SYMBOLS" ]; then
 fi
 
 LDFLAGS="\
-$SHARED \
+$LDFLAGS $SHARED \
 --sysroot=$NDK/platforms/$PLATFORMVER/arch-mips \
 -L$NDK/platforms/$PLATFORMVER/arch-mips/usr/lib \
 -lc -lm -ldl -lz \

@@ -33,7 +33,7 @@ fi
 ARCH=x86
 
 CFLAGS="\
--ffunction-sections -funwind-tables -no-canonical-prefixes \
+-fpic -ffunction-sections -funwind-tables -no-canonical-prefixes \
 -fstack-protector -O2 -g -DNDEBUG \
 -fomit-frame-pointer -fstrict-aliasing -funswitch-loops \
 -finline-limit=300 \
@@ -54,7 +54,7 @@ if [ -n "$ALLOW_UNRESOLVED_SYMBOLS" ]; then
 fi
 
 LDFLAGS="\
-$SHARED \
+$LDFLAGS $SHARED \
 --sysroot=$NDK/platforms/$PLATFORMVER/arch-x86 \
 -L$NDK/platforms/$PLATFORMVER/arch-x86/usr/lib \
 -lc -lm -ldl -lz \
